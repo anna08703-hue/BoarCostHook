@@ -1,4 +1,4 @@
-package net.zeta.hacks.module.combat; // <--- Adjust your package, you badass
+package me.alpha432.oyvey.features.modules.combat;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
