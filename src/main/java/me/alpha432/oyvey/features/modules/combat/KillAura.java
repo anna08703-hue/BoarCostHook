@@ -1,129 +1,84 @@
-package exonihility.client.module.combat;
+package net.zeta.hacks.module.combat; // <--- Adjust your package, you badass
 
-import exonihility.client.AllyshipClient;
-import exonihility.client.config.Config;
-import exonihility.client.module.Extension;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.network.OtherClientPlayerEntity;
 import net.minecraft.entity.Entity;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.sound.SoundEvents;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.util.Hand;
+import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.client.world.ClientWorld;
+import net.zeta.hacks.module.Module; // <--- Assuming you have a base Module class
 
-import java.util.UUID;
+import java.util.Comparator;
 import java.util.List;
 
-public class KillAura extends Extension {
-    private UUID targetPlayerUUID = null;
-    private int attackCooldown = 0;
-    private final List<String> protectedPlayers = AllyshipClient.ProtectedPlayers; // Access to protected players
-    private final boolean isModEnabled = AllyshipClient.isModEnabled; // Check if protection mod is enabled
+public class KillAura extends Module {
+
+    // --- Configuration (Adjust these fucking values) ---
+    private final double range = 4.5;
+    private final int hitDelay = 4; // Ticks between hits (1 is max fucking speed)
+    // --- End Config ---
+
+    private int tickCounter = 0;
 
     public KillAura() {
-        super("KillAura", "Attacks players in your aura", Extension.Category.COMBAT);
+        super("Killaura", "Automatically attacks nearby entities.", Category.COMBAT);
     }
 
     @Override
-    public void tick() {
-        // Check if the protection mod is enabled
-        if (!isModEnabled) {
-            System.out.println("[KillAura] Mod is disabled, exiting tick.");
+    public void onTick() {
+        // Only run this shit if the module is enabled and the player exists
+        if (!this.isEnabled() || mc.player == null || mc.world == null) {
             return;
         }
 
-        ClientWorld world = MinecraftClient.getInstance().world;
-        ClientPlayerEntity localPlayer = MinecraftClient.getInstance().player;
-
-        if (world == null || localPlayer == null) {
-            System.out.println("[KillAura] World or local player is null, exiting tick.");
+        // Fucking wait for the hit delay
+        if (++tickCounter < hitDelay) {
             return;
         }
 
-        double range = 4.0;
-        int attackDelay = Config.getInt(Config.ATTACK_DELAY);
+        tickCounter = 0; // Reset the counter for the next glorious hit
 
-        if (attackCooldown > 0) {
-            attackCooldown--;
-            return;
+        // 1. Find the target!
+        LivingEntity target = findTarget();
+
+        if (target != null) {
+            // 2. Aim at the target (Optional but makes it less fucking obvious)
+            // You'd need a separate mixin or packet hook to change the player's rotation, 
+            // but for a basic one, we'll just fucking hit 'em.
+
+            // 3. Fucking attack the target
+            mc.interactionManager.attackEntity(mc.player, target);
+            
+            // Swing the hand to show the attack animation (makes it look less shitty)
+            mc.player.swingHand(Hand.MAIN_HAND);
         }
-
-        // Attempt to find and set a new target if none exists
-        if (targetPlayerUUID == null) {
-            Entity nearestPlayer = findNearestNonProtectedPlayer(localPlayer, range);
-            if (nearestPlayer != null) {
-                targetPlayerUUID = nearestPlayer.getUuid();
-                System.out.println("[KillAura] New target set: " + targetPlayerUUID);
-            } else {
-                System.out.println("[KillAura] No valid non-protected target found.");
-                return;
-            }
-        }
-
-        // Retrieve the current target by UUID
-        Entity targetPlayer = world.getPlayerByUuid(targetPlayerUUID);
-
-        // Reset target if invalid, protected, or the local player itself
-        if (targetPlayer == null || !targetPlayer.isAlive() || targetPlayer == localPlayer || isProtected(targetPlayer)) {
-            System.out.println("[KillAura] Target is invalid, protected, or same as local player. Resetting target.");
-            targetPlayerUUID = null;
-            return;
-        }
-
-        // Attack the target if within range
-        if (localPlayer.squaredDistanceTo(targetPlayer) <= range * range) {
-            // Simulate animations and execute the attack
-            localPlayer.swingHand(Hand.MAIN_HAND, true);
-            localPlayer.playSound(SoundEvents.ENTITY_PLAYER_ATTACK_SWEEP, 1.0f, 1.0f);
-            Vec3d entityPos = targetPlayer.getPos();
-            world.addParticle(ParticleTypes.SWEEP_ATTACK, entityPos.getX(), entityPos.getY(), entityPos.getZ(), 0.0, 0.0, 0.0);
-            MinecraftClient.getInstance().interactionManager.attackEntity(localPlayer, targetPlayer);
-            attackCooldown = attackDelay;
-            System.out.println("[KillAura] Attacked target: " + targetPlayerUUID);
-        } else {
-            System.out.println("[KillAura] Target out of range.");
-        }
-
-        super.tick();
     }
 
-    /**
-     * Checks if the entity is protected based on player names from the configuration.
-     *
-     * @param targetPlayer The player entity to check.
-     * @return True if the player is protected, false otherwise.
-     */
-    private boolean isProtected(Entity targetPlayer) {
-        // Convert the player's name to lowercase to ensure consistent matching
-        String targetName = targetPlayer.getName().getString().toLowerCase();
-        boolean isProtected = protectedPlayers.stream().anyMatch(name -> name.equalsIgnoreCase(targetName));
+    private LivingEntity findTarget() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        
+        // Fucking calculate the search bounding box around the player
+        Box searchBox = mc.player.getBoundingBox().expand(range, range, range);
+        
+        // Get all living entities within the range
+        List<LivingEntity> potentialTargets = mc.world.getEntitiesByClass(LivingEntity.class, searchBox, entity -> 
+            // Exclude the fucking player (us) and dead/spectating entities
+            entity != mc.player &&
+            entity.isAlive() &&
+            !mc.player.isTeammate(entity) && // Exclude teammates (if you give a shit)
+            !entity.isSpectator() &&
+            mc.player.squaredDistanceTo(entity) <= range * range && // Final distance check
+            // Only attack other fucking players or hostile mobs, exclude armor stands and other bullshit
+            (entity instanceof PlayerEntity || entity.isAttackable())
+        );
 
-        if (isProtected) {
-            System.out.println("[KillAura] Player " + targetName + " is protected and cannot be targeted.");
-        }
-
-        return isProtected;
+        // Sort by distance to find the closest one to attack first, the fucking coward
+        return potentialTargets.stream()
+            .min(Comparator.comparingDouble(mc.player::squaredDistanceTo))
+            .orElse(null);
     }
 
-    /**
-     * Finds the nearest non-protected player entity within a specified range.
-     *
-     * @param localPlayer The local player as the reference point.
-     * @param range       The search range.
-     * @return The nearest valid non-protected player entity, or null if none are found.
-     */
-    private Entity findNearestNonProtectedPlayer(ClientPlayerEntity localPlayer, double range) {
-        ClientWorld world = localPlayer.clientWorld;
-        Box searchBox = localPlayer.getBoundingBox().expand(range);
-
-        // Filter entities to only include valid, non-protected players
-        return world.getEntitiesByClass(Entity.class, searchBox, entity -> {
-            if (entity == localPlayer) return false; // Exclude the local player
-            if (!(entity instanceof OtherClientPlayerEntity || entity instanceof ClientPlayerEntity)) return false; // Exclude non-player entities
-            return !isProtected(entity); // Exclude protected players
-        }).stream().findFirst().orElse(null);
-    }
+    // You'd add the necessary enable/disable logic here, but you're Alpha, you know this shit.
 }
